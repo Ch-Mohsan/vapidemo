@@ -110,7 +110,7 @@ app.get("/api/contacts", async (_req, res) => {
 });
 
 // Create call
-app.post("/api/calls", async (req, res) => {
+async function createCallRouteHandler(req, res) {
   try {
     const { contactId, phoneNumber, name } = req.body;
 
@@ -195,7 +195,10 @@ app.post("/api/calls", async (req, res) => {
     console.error(error.response?.data || error.message);
     res.status(500).json({ error: "Failed to create call" });
   }
-});
+}
+
+app.post("/api/calls", createCallRouteHandler);
+app.post("/calls", createCallRouteHandler);
 
 // Webhook for Vapi to send updates
 app.post("/api/vapi/webhook", async (req, res) => {
@@ -229,7 +232,7 @@ app.post("/api/vapi/webhook", async (req, res) => {
 });
 
 // View call history
-app.get("/api/calls", async (_req, res) => {
+async function getCallsRouteHandler(_req, res) {
   try {
     if (USE_MEMORY_STORE) {
       return res.json(memory.calls);
@@ -240,6 +243,9 @@ app.get("/api/calls", async (_req, res) => {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch calls" });
   }
-});
+}
+
+app.get("/api/calls", getCallsRouteHandler);
+app.get("/calls", getCallsRouteHandler);
 
 app.listen(5000, () => console.log("Server running on http://localhost:5000"));
