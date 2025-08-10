@@ -1,64 +1,144 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+
+const API_BASE = "http://localhost:5000";
 
 function App() {
-  const [number, setNumber] = useState("");
-  const [name, setName] = useState("");
-  const [history, setHistory] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [calls, setCalls] = useState([]);
 
-  const fetchHistory = async () => {
-    const res = await fetch("http://localhost:5000/api/calls");
-    setHistory(await res.json());
+  const [newName, setNewName] = useState("");
+  const [newNumber, setNewNumber] = useState("");
+
+  const fetchContacts = async () => {
+    const res = await fetch(`${API_BASE}/api/contacts`);
+    const data = await res.json();
+    setContacts(data);
   };
 
-  const createCall = async () => {
-    await fetch("http://localhost:5000/api/calls", {
+  const fetchCalls = async () => {
+    const res = await fetch(`${API_BASE}/api/calls`);
+    const data = await res.json();
+    setCalls(data);
+  };
+
+  const addContact = async () => {
+    if (!newName || !newNumber) return;
+    await fetch(`${API_BASE}/api/contacts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phoneNumber: number, name })
+      body: JSON.stringify({ name: newName, phoneNumber: newNumber })
     });
-    fetchHistory();
+    setNewName("");
+    setNewNumber("");
+    fetchContacts();
+  };
+
+  const createCallForContact = async (contactId) => {
+    await fetch(`${API_BASE}/api/calls`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contactId })
+    });
+    fetchCalls();
   };
 
   useEffect(() => {
-    fetchHistory();
+    fetchContacts();
+    fetchCalls();
+    const interval = setInterval(fetchCalls, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   return (
-    <div style={{ padding: "20px" }}>
+    <div style={{ padding: 20, fontFamily: "sans-serif", maxWidth: 900, margin: "0 auto" }}>
       <h1>Vapi Demo</h1>
-      <input
-        placeholder="Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />{" "}
-      <input
-        placeholder="Phone Number"
-        value={number}
-        onChange={(e) => setNumber(e.target.value)}
-      />{" "}
-      <button onClick={createCall}>Create Call</button>
 
-      <h2>Call History</h2>
-      <table border="1" cellPadding="5">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Number</th>
-            <th>Status</th>
-            <th>Transcript</th>
-          </tr>
-        </thead>
-        <tbody>
-          {history.map((call) => (
-            <tr key={call.id}>
-              <td>{call.name}</td>
-              <td>{call.phoneNumber}</td>
-              <td>{call.status}</td>
-              <td>{call.transcript || "N/A"}</td>
+      <section style={{ marginBottom: 24 }}>
+        <h2>Add Contact</h2>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            placeholder="Name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <input
+            placeholder="Phone Number"
+            value={newNumber}
+            onChange={(e) => setNewNumber(e.target.value)}
+          />
+          <button onClick={addContact}>Add</button>
+        </div>
+      </section>
+
+      <section style={{ marginBottom: 24 }}>
+        <h2>Contacts</h2>
+        <table border="1" cellPadding="6" width="100%">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Number</th>
+              <th>Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {contacts.map((c) => (
+              <tr key={c._id}>
+                <td>{c.name}</td>
+                <td>{c.phoneNumber}</td>
+                <td>
+                  <button onClick={() => createCallForContact(c._id)}>Call</button>
+                </td>
+              </tr>
+            ))}
+            {contacts.length === 0 && (
+              <tr>
+                <td colSpan={3} style={{ textAlign: "center" }}>
+                  No contacts yet
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Call History</h2>
+        <table border="1" cellPadding="6" width="100%">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Name</th>
+              <th>Number</th>
+              <th>Status</th>
+              <th>Transcript</th>
+            </tr>
+          </thead>
+          <tbody>
+            {calls.map((call) => (
+              <tr key={call._id || call.vapiCallId}>
+                <td>{call.createdAt ? new Date(call.createdAt).toLocaleString() : "-"}</td>
+                <td>{call.name}</td>
+                <td>{call.phoneNumber}</td>
+                <td>{call.status}</td>
+                <td style={{ maxWidth: 400, whiteSpace: "pre-wrap" }}>
+                  {typeof call.transcript === "string"
+                    ? call.transcript
+                    : call.transcript
+                    ? JSON.stringify(call.transcript)
+                    : "N/A"}
+                </td>
+              </tr>
+            ))}
+            {calls.length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ textAlign: "center" }}>
+                  No calls yet
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }
