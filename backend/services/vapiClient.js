@@ -1,13 +1,13 @@
 import axios from "axios";
 
 const VAPI_BASE_URL = "https://api.vapi.ai";
-const VAPI_API_KEY = process.env.VAPI_API_KEY;
 
 function getAuthHeaders() {
-  if (!VAPI_API_KEY) {
+  const apiKey = process.env.VAPI_API_KEY;
+  if (!apiKey) {
     throw new Error("VAPI_API_KEY is not set in environment");
   }
-  return { Authorization: `Bearer ${VAPI_API_KEY}` };
+  return { Authorization: `Bearer ${apiKey}` };
 }
 
 export async function createOutboundCall(payload) {
