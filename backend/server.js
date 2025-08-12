@@ -4,6 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { normalizeVapiEventType, extractCallIdFromEvent, deriveStatusAndTranscript } from "./utils/vapiEvents.js";
+import { createOutboundCall, getCall as vapiGetCall, getAssistant as vapiGetAssistant, listPhoneNumbers as vapiListPhoneNumbers, listCalls as vapiListCalls } from "./services/vapiClient.js";
 
 dotenv.config();
 const app = express();
@@ -17,21 +18,6 @@ const MONGODB_URI = process.env.MONGODB_URI;
 let USE_MEMORY_STORE = process.env.FORCE_MEMORY_STORE === "1" || !MONGODB_URI;
 const USE_VAPI = Boolean(VAPI_KEY && ASSISTANT_ID && PHONE_NUMBER_ID);
 
-if (!USE_MEMORY_STORE) {
-  mongoose
-    .connect(MONGODB_URI, { dbName: "vapi_demo" })
-    .then(() => console.log("Connected to MongoDB"))
-    .catch((err) => {
-      console.error("MongoDB connection error", err?.message || err);
-      USE_MEMORY_STORE = true;
-      console.log("Falling back to in-memory store (non-persistent).");
-    });
-} else {
-  console.log(
-    "Using in-memory store (non-persistent).\nSet MONGODB_URI in backend/.env or unset FORCE_MEMORY_STORE to enable persistence."
-  );
-}
-
 // Health
 app.get("/api/health", (_req, res) => {
   res.json({ 
@@ -43,6 +29,15 @@ app.get("/api/health", (_req, res) => {
       hasAssistantId: Boolean(ASSISTANT_ID),
       hasPhoneNumberId: Boolean(PHONE_NUMBER_ID)
     }
+  });
+});
+
+// Public config for frontend (no secrets)
+app.get("/api/config", (_req, res) => {
+  res.json({
+    vapiConfigured: USE_VAPI,
+    assistantId: ASSISTANT_ID || null,
+    phoneNumberId: PHONE_NUMBER_ID || null,
   });
 });
 
@@ -268,9 +263,9 @@ async function createCallRouteHandler(req, res) {
           type: "outboundPhoneCall",
           assistantId: ASSISTANT_ID,
           phoneNumberId: PHONE_NUMBER_ID,
-          customer: { 
+          customer: {
             number: formattedNumber,
-            name: resolvedName 
+            name: resolvedName
           },
         };
 
@@ -286,26 +281,15 @@ if (Object.keys(mergedOverrides).length > 0) {
         console.log("=== ENHANCED VAPI CALL PAYLOAD ===");
         console.log(JSON.stringify(payload, null, 2));
         console.log("==================================");
-        
-        const response = await axios.post("https://api.vapi.ai/call", payload, {
-          headers: {
-            Authorization: `Bearer ${VAPI_KEY}`,
-            "Content-Type": "application/json"
-          },
-          timeout: 30000
-        });
-        
-        data = response.data;
+        data = await createOutboundCall(payload);
         console.log("✅ Vapi call initiated successfully:", data);
         
         // IMMEDIATE STATUS CHECK AFTER 5 SECONDS
         setTimeout(async () => {
           try {
-            const statusResponse = await axios.get(`https://api.vapi.ai/call/${data.id}`, {
-              headers: { Authorization: `Bearer ${VAPI_KEY}` }
-            });
-            console.log(`📞 Call ${data.id} status after 5s:`, statusResponse.data.status);
-            console.log(`📞 Full call details:`, JSON.stringify(statusResponse.data, null, 2));
+            const statusData = await vapiGetCall(data.id);
+            console.log(`📞 Call ${data.id} status after 5s:`, statusData.status);
+            console.log(`📞 Full call details:`, JSON.stringify(statusData, null, 2));
           } catch (err) {
             console.error("Failed to check call status:", err.message);
           }
@@ -443,11 +427,7 @@ app.get("/api/test/assistant", async (req, res) => {
       return res.status(400).json({ error: "Vapi credentials not configured" });
     }
 
-    const assistantResponse = await axios.get(`https://api.vapi.ai/assistant/${ASSISTANT_ID}`, {
-      headers: { Authorization: `Bearer ${VAPI_KEY}` }
-    });
-
-    const assistant = assistantResponse.data;
+    const assistant = await vapiGetAssistant(ASSISTANT_ID);
     
     const diagnostics = {
       assistantId: ASSISTANT_ID,
@@ -490,12 +470,9 @@ app.get("/api/vapi/assistant", async (req, res) => {
       return res.status(400).json({ error: "Vapi API key not configured" });
     }
 
-    const response = await axios.get(`https://api.vapi.ai/assistant/${ASSISTANT_ID}`, {
-      headers: { Authorization: `Bearer ${VAPI_KEY}` }
-    });
-
-    console.log("Assistant configuration:", JSON.stringify(response.data, null, 2));
-    res.json(response.data);
+    const assistant = await vapiGetAssistant(ASSISTANT_ID);
+    console.log("Assistant configuration:", JSON.stringify(assistant, null, 2));
+    res.json(assistant);
   } catch (error) {
     console.error("Failed to fetch assistant:", error.response?.data || error.message);
     res.status(500).json({ 
@@ -513,12 +490,9 @@ app.get("/api/vapi/assistant/:id", async (req, res) => {
     }
 
     const assistantId = req.params.id;
-    const response = await axios.get(`https://api.vapi.ai/assistant/${assistantId}`, {
-      headers: { Authorization: `Bearer ${VAPI_KEY}` }
-    });
-
-    console.log("Assistant configuration:", JSON.stringify(response.data, null, 2));
-    res.json(response.data);
+    const assistant = await vapiGetAssistant(assistantId);
+    console.log("Assistant configuration:", JSON.stringify(assistant, null, 2));
+    res.json(assistant);
   } catch (error) {
     console.error("Failed to fetch assistant:", error.response?.data || error.message);
     res.status(500).json({ 
@@ -536,12 +510,9 @@ app.get("/api/debug/call/:callId", async (req, res) => {
     }
 
     const callId = req.params.callId;
-    const response = await axios.get(`https://api.vapi.ai/call/${callId}`, {
-      headers: { Authorization: `Bearer ${VAPI_KEY}` }
-    });
-
-    console.log("🔍 Call debug info:", JSON.stringify(response.data, null, 2));
-    res.json(response.data);
+    const call = await vapiGetCall(callId);
+    console.log("🔍 Call debug info:", JSON.stringify(call, null, 2));
+    res.json(call);
   } catch (error) {
     console.error("Failed to fetch call details:", error.response?.data || error.message);
     res.status(500).json({ 
@@ -558,12 +529,9 @@ app.get("/api/vapi/phone-numbers", async (req, res) => {
       return res.status(400).json({ error: "Vapi API key not configured" });
     }
 
-    const response = await axios.get("https://api.vapi.ai/phone-number", {
-      headers: { Authorization: `Bearer ${VAPI_KEY}` }
-    });
-
-    console.log("Available Vapi phone numbers:", response.data);
-    res.json(response.data);
+    const phoneNumbers = await vapiListPhoneNumbers();
+    console.log("Available Vapi phone numbers:", phoneNumbers);
+    res.json(phoneNumbers);
   } catch (error) {
     console.error("Failed to fetch Vapi phone numbers:", error.response?.data || error.message);
     res.status(500).json({ 
@@ -580,11 +548,8 @@ app.get("/api/vapi/calls", async (req, res) => {
       return res.status(400).json({ error: "Vapi not configured" });
     }
 
-    const response = await axios.get("https://api.vapi.ai/call", {
-      headers: { Authorization: `Bearer ${VAPI_KEY}` }
-    });
-
-    res.json(response.data);
+    const calls = await vapiListCalls();
+    res.json(calls);
   } catch (error) {
     console.error("Failed to fetch Vapi calls:", error.response?.data || error.message);
     res.status(500).json({ error: "Failed to fetch Vapi calls" });

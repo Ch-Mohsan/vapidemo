@@ -96,6 +96,7 @@ Vapi will POST call events to this endpoint. The backend updates call records an
 
 ## API Summary
 
+- GET `/api/config` (Frontend helper – shows whether Vapi is configured; no secrets)
 - POST `/api/contacts` { name, phoneNumber }
 - GET `/api/contacts`
 - POST `/api/calls` { contactId } | { name, phoneNumber }
@@ -106,6 +107,7 @@ Vapi will POST call events to this endpoint. The backend updates call records an
 ## Troubleshooting the assistant "not talking"
 - Ensure your Vapi Assistant has a voice and a non-empty `firstMessage` configured in the Vapi dashboard.
 - Or set `VAPI_FIRST_MESSAGE` and voice env vars in `backend/.env` to force overrides.
+- The backend ensures a safe default `firstMessage` is applied when none is provided.
 - Use backend diagnostics:
   - `GET /api/test/assistant` – checks model, voice, firstMessage, systemMessage
   - After initiating a call: `GET /api/debug/call/:CALL_ID`
@@ -113,3 +115,4 @@ Vapi will POST call events to this endpoint. The backend updates call records an
 ## Notes
 - CORS is enabled for development. Adjust as needed for production.
 - In-memory mode is helpful for quick demos but does not persist data.
+- Vapi calls are now centralized in `backend/services/vapiClient.js` for clarity and reuse.

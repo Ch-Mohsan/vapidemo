@@ -5,6 +5,7 @@ const API_BASE = "http://localhost:5000";
 function App() {
   const [contacts, setContacts] = useState([]);
   const [calls, setCalls] = useState([]);
+  const [config, setConfig] = useState(null);
 
   const [newName, setNewName] = useState("");
   const [newNumber, setNewNumber] = useState("");
@@ -14,6 +15,9 @@ function App() {
 
   // Detect user location and set appropriate country code
   useEffect(() => {
+    // Load backend config
+    fetch(`${API_BASE}/api/config`).then(r => r.json()).then(setConfig).catch(() => setConfig({ vapiConfigured: false }));
+
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -245,6 +249,22 @@ function App() {
   return (
     <div style={{ padding: 20, fontFamily: "sans-serif", maxWidth: 900, margin: "0 auto" }}>
       <h1>Vapi Demo - Pakistan 🇵🇰</h1>
+      {config && (
+        <div style={{
+          margin: "12px 0",
+          padding: "10px",
+          borderRadius: 4,
+          background: config.vapiConfigured ? "#e8f5e9" : "#fff3cd",
+          color: config.vapiConfigured ? "#1b5e20" : "#856404",
+          fontSize: 14
+        }}>
+          {config.vapiConfigured ? (
+            <>✅ Vapi configured. Assistant: <code>{config.assistantId}</code></>
+          ) : (
+            <>⚠️ Vapi not fully configured. Set `VAPI_API_KEY`, `VAPI_ASSISTANT_ID`, and `VAPI_PHONE_NUMBER_ID` in `backend/.env`.</>
+          )}
+        </div>
+      )}
       
       {userLocation && (
         <div style={{ 
