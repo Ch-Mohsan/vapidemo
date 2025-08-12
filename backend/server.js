@@ -172,6 +172,49 @@ app.get("/api/contacts", async (_req, res) => {
   }
 });
 
+// Build assistant overrides from environment
+function getAssistantOverridesFromEnv() {
+  const overrides = {};
+
+  const firstMessage = process.env.VAPI_FIRST_MESSAGE;
+  const systemMessage = process.env.VAPI_SYSTEM_MESSAGE;
+
+  if (firstMessage) overrides.firstMessage = firstMessage;
+  if (systemMessage) overrides.systemMessage = systemMessage;
+
+  const voiceProvider = process.env.VAPI_VOICE_PROVIDER;
+  const voiceId = process.env.VAPI_VOICE_ID;
+
+  if (voiceProvider && voiceId) {
+    overrides.voice = {
+      provider: voiceProvider,
+      voiceId: voiceId,
+    };
+
+    const stability = process.env.VAPI_VOICE_STABILITY;
+    const similarityBoost = process.env.VAPI_VOICE_SIMILARITY_BOOST;
+    const style = process.env.VAPI_VOICE_STYLE;
+    const useSpeakerBoost = process.env.VAPI_VOICE_USE_SPEAKER_BOOST;
+
+    if (stability) overrides.voice.stability = Number(stability);
+    if (similarityBoost) overrides.voice.similarityBoost = Number(similarityBoost);
+    if (style) overrides.voice.style = Number(style);
+    if (useSpeakerBoost) overrides.voice.useSpeakerBoost = useSpeakerBoost === "1" || useSpeakerBoost === "true";
+  }
+
+  const silenceTimeout = process.env.VAPI_SILENCE_TIMEOUT_SECONDS;
+  const maxDuration = process.env.VAPI_MAX_DURATION_SECONDS;
+  const recordingEnabled = process.env.VAPI_RECORDING_ENABLED;
+  const endCallFunctionEnabled = process.env.VAPI_END_CALL_FUNCTION_ENABLED;
+
+  if (silenceTimeout) overrides.silenceTimeoutSeconds = Number(silenceTimeout);
+  if (maxDuration) overrides.maxDurationSeconds = Number(maxDuration);
+  if (recordingEnabled) overrides.recordingEnabled = recordingEnabled === "1" || recordingEnabled === "true";
+  if (endCallFunctionEnabled) overrides.endCallFunctionEnabled = endCallFunctionEnabled === "1" || endCallFunctionEnabled === "true";
+
+  return overrides;
+}
+
 // ENHANCED CALL CREATION WITH BETTER CONFIGURATION
 async function createCallRouteHandler(req, res) {
   try {
@@ -211,7 +254,15 @@ async function createCallRouteHandler(req, res) {
     let data;
     if (USE_VAPI) {
       try {
-        // ENHANCED PAYLOAD WITH ASSISTANT OVERRIDES
+        // Allow request-level overrides to temporarily customize the assistant
+        const requestOverrides = (req.body && req.body.assistantOverrides && typeof req.body.assistantOverrides === 'object')
+          ? req.body.assistantOverrides
+          : {};
+
+        // Merge env overrides (as defaults) with request overrides (as specific per-call changes)
+        const envOverrides = getAssistantOverridesFromEnv();
+        const mergedOverrides = { ...envOverrides, ...requestOverrides };
+
         const payload = {
           type: "outboundPhoneCall",
           assistantId: ASSISTANT_ID,
@@ -220,24 +271,13 @@ async function createCallRouteHandler(req, res) {
             number: formattedNumber,
             name: resolvedName 
           },
-          // ADD ASSISTANT OVERRIDES TO ENSURE PROPER BEHAVIOR
-          // assistantOverrides: {
-          //   firstMessage: "Hello! This is your AI assistant calling. How can I help you today?",
-          //   voice: {
-          //     provider: "11labs",
-          //     voiceId: "rachel",
-          //     stability: 0.5,
-          //     similarityBoost: 0.8,
-          //     style: 0.0,
-          //     useSpeakerBoost: true
-          //   },
-          //   recordingEnabled: true,
-          //   endCallFunctionEnabled: true,
-          //   silenceTimeoutSeconds: 30,
-          //   maxDurationSeconds: 300
-          // }
         };
-        
+
+        // Only include assistantOverrides if we have at least one override
+        if (Object.keys(mergedOverrides).length > 0) {
+          payload.assistantOverrides = mergedOverrides;
+        }
+
         console.log("=== ENHANCED VAPI CALL PAYLOAD ===");
         console.log(JSON.stringify(payload, null, 2));
         console.log("==================================");
@@ -585,6 +625,9 @@ console.log("=== Vapi Configuration Check ===");
 console.log("VAPI_API_KEY:", VAPI_KEY ? `Set (${VAPI_KEY.substring(0, 10)}...)` : "Missing");
 console.log("VAPI_ASSISTANT_ID:", ASSISTANT_ID ? `Set (${ASSISTANT_ID})` : "Missing");
 console.log("VAPI_PHONE_NUMBER_ID:", PHONE_NUMBER_ID ? `Set (${PHONE_NUMBER_ID})` : "Missing");
+// Also log if any overrides present
+const _overrides = getAssistantOverridesFromEnv();
+console.log("Assistant overrides from env present:", Object.keys(_overrides).length > 0);
 console.log("USE_VAPI:", USE_VAPI);
 console.log("================================");
 
