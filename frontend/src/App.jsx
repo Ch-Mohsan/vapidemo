@@ -219,11 +219,18 @@ function App() {
     fetchContacts();
   };
 
+  const [overrideFirstMessage, setOverrideFirstMessage] = useState("");
+  const [overrideSystemMessage, setOverrideSystemMessage] = useState("");
+
   const createCallForContact = async (contactId) => {
+    const assistantOverrides = {};
+    if (overrideFirstMessage.trim()) assistantOverrides.firstMessage = overrideFirstMessage.trim();
+    if (overrideSystemMessage.trim()) assistantOverrides.systemMessage = overrideSystemMessage.trim();
+
     await fetch(`${API_BASE}/api/calls`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contactId })
+      body: JSON.stringify({ contactId, assistantOverrides })
     });
     fetchCalls();
   };
@@ -310,6 +317,29 @@ function App() {
             • <strong>Zong:</strong> 0310-0315<br/>
             • <strong>Ufone:</strong> 0330-0335<br/>
             <em>Formats: +923001234567, 03001234567, or 3001234567</em>
+          </div>
+        </div>
+      </section>
+
+      <section style={{ marginBottom: 24 }}>
+        <h2>Assistant Overrides (optional)</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+          <textarea
+            placeholder="First message the assistant will speak"
+            value={overrideFirstMessage}
+            onChange={(e) => setOverrideFirstMessage(e.target.value)}
+            rows={2}
+            style={{ width: "100%" }}
+          />
+          <textarea
+            placeholder="System message to guide assistant behavior"
+            value={overrideSystemMessage}
+            onChange={(e) => setOverrideSystemMessage(e.target.value)}
+            rows={2}
+            style={{ width: "100%" }}
+          />
+          <div style={{ fontSize: 12, color: "#666" }}>
+            If not provided, the backend will use environment defaults (see `backend/.env`).
           </div>
         </div>
       </section>

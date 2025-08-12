@@ -3,6 +3,7 @@ import axios from "axios";
 import cors from "cors";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import { normalizeVapiEventType, extractCallIdFromEvent, deriveStatusAndTranscript } from "./utils/vapiEvents.js";
 
 dotenv.config();
 const app = express();
@@ -273,10 +274,14 @@ async function createCallRouteHandler(req, res) {
           },
         };
 
-        // Only include assistantOverrides if we have at least one override
-        if (Object.keys(mergedOverrides).length > 0) {
-          payload.assistantOverrides = mergedOverrides;
-        }
+        // Ensure the assistant will talk: if no firstMessage anywhere, apply a gentle default
+if (!mergedOverrides.firstMessage) {
+  mergedOverrides.firstMessage = process.env.VAPI_FIRST_MESSAGE || "Hello! This is your AI assistant calling.";
+}
+// Only include assistantOverrides if we have at least one override
+if (Object.keys(mergedOverrides).length > 0) {
+  payload.assistantOverrides = mergedOverrides;
+}
 
         console.log("=== ENHANCED VAPI CALL PAYLOAD ===");
         console.log(JSON.stringify(payload, null, 2));
@@ -362,64 +367,46 @@ async function createCallRouteHandler(req, res) {
 
 app.post("/api/calls", createCallRouteHandler);
 
-// ENHANCED WEBHOOK HANDLER WITH DETAILED LOGGING
+// ENHANCED WEBHOOK HANDLER WITH DETAILED LOGGING AND NORMALIZATION
 app.post("/api/vapi/webhook", async (req, res) => {
   try {
     const event = req.body || {};
-    
+
+    const normalizedType = normalizeVapiEventType(event.type);
+    const vapiId = extractCallIdFromEvent(event);
+
     console.log("🔔 === VAPI WEBHOOK RECEIVED ===");
     console.log("Timestamp:", new Date().toISOString());
-    console.log("Event Type:", event.type);
-    console.log("Call ID:", event.call?.id || event.id);
+    console.log("Event Type:", event.type, "=>", normalizedType);
+    console.log("Call ID:", vapiId);
     console.log("Full Event:", JSON.stringify(event, null, 2));
     console.log("===============================");
-    
-    const vapiId = event.call?.id || event.id;
+
     if (!vapiId) {
       console.log("⚠️ No call ID found in webhook event");
       return res.sendStatus(200);
     }
 
-    // DETAILED STATUS TRACKING
-    let statusUpdate = null;
-    let transcriptUpdate = null;
+    const { statusUpdate, transcriptUpdate } = deriveStatusAndTranscript(event);
 
-    switch (event.type) {
-      case "call-started":
-        statusUpdate = "in-progress";
-        console.log("📞 Call started - Assistant should begin talking now");
-        break;
-      case "call-ended":
-        statusUpdate = "completed";
-        console.log("📞 Call ended");
-        if (event.endedReason) {
-          console.log("📞 End reason:", event.endedReason);
-        }
-        break;
-      case "transcript":
-        if (event.transcript) {
-          transcriptUpdate = event.transcript;
-          console.log("📝 Transcript update:", event.transcript);
-        }
-        break;
-      case "function-call":
-        console.log("⚡ Function call:", event.functionCall);
-        break;
-      case "hang":
-        console.log("📞 Call hang detected");
-        break;
-      case "speech-update":
-        console.log("🗣️ Speech update - Role:", event.role, "Status:", event.status);
-        break;
-      default:
-        console.log("📋 Unknown event type:", event.type);
+    // Additional logging for important milestones
+    if (normalizedType === "call-started") {
+      console.log("📞 Call started - Assistant should begin talking now");
+    } else if (normalizedType === "call-ended") {
+      console.log("📞 Call ended", event.endedReason ? `- Reason: ${event.endedReason}` : "");
+    } else if (normalizedType === "function-call") {
+      console.log("⚡ Function call:", event.functionCall);
+    } else if (normalizedType === "speech-update") {
+      console.log("🗣️ Speech update - Role:", event.role, "Status:", event.status);
+    } else {
+      console.log("📋 Event:", normalizedType);
     }
 
     // Update database
     const update = {};
     if (statusUpdate) update.status = statusUpdate;
     if (transcriptUpdate) update.transcript = transcriptUpdate;
-    if (event.status) update.status = event.status;
+    if (event.status && !update.status) update.status = event.status;
 
     if (Object.keys(update).length > 0) {
       await updateCallByVapiId(vapiId, update);
