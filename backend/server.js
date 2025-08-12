@@ -18,6 +18,22 @@ const MONGODB_URI = process.env.MONGODB_URI;
 let USE_MEMORY_STORE = process.env.FORCE_MEMORY_STORE === "1" || !MONGODB_URI;
 const USE_VAPI = Boolean(VAPI_KEY && ASSISTANT_ID && PHONE_NUMBER_ID);
 
+// Restore MongoDB connection with safe fallback to in-memory store
+if (!USE_MEMORY_STORE) {
+  mongoose
+    .connect(MONGODB_URI, { dbName: "vapi_demo" })
+    .then(() => console.log("Connected to MongoDB"))
+    .catch((err) => {
+      console.error("MongoDB connection error", err?.message || err);
+      USE_MEMORY_STORE = true;
+      console.log("Falling back to in-memory store (non-persistent). Set FORCE_MEMORY_STORE=1 to silence this.");
+    });
+} else {
+  console.log(
+    "Using in-memory store (non-persistent).\nSet MONGODB_URI in backend/.env or unset FORCE_MEMORY_STORE to enable persistence."
+  );
+}
+
 // Health
 app.get("/api/health", (_req, res) => {
   res.json({ 
