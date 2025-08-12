@@ -11,9 +11,10 @@ app.use(express.json());
 
 const VAPI_KEY = process.env.VAPI_API_KEY;
 const ASSISTANT_ID = process.env.VAPI_ASSISTANT_ID;
+const PHONE_NUMBER_ID = process.env.VAPI_PHONE_NUMBER_ID;
 const MONGODB_URI = process.env.MONGODB_URI;
 let USE_MEMORY_STORE = process.env.FORCE_MEMORY_STORE === "1" || !MONGODB_URI;
-const USE_VAPI = Boolean(VAPI_KEY && ASSISTANT_ID);
+const USE_VAPI = Boolean(VAPI_KEY && ASSISTANT_ID && PHONE_NUMBER_ID);
 
 if (!USE_MEMORY_STORE) {
   mongoose
@@ -32,7 +33,16 @@ if (!USE_MEMORY_STORE) {
 
 // Health
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, db: USE_MEMORY_STORE ? "memory" : "mongo", vapi: USE_VAPI });
+  res.json({ 
+    ok: true, 
+    db: USE_MEMORY_STORE ? "memory" : "mongo", 
+    vapi: USE_VAPI,
+    config: {
+      hasVapiKey: Boolean(VAPI_KEY),
+      hasAssistantId: Boolean(ASSISTANT_ID),
+      hasPhoneNumberId: Boolean(PHONE_NUMBER_ID)
+    }
+  });
 });
 
 // Models (for MongoDB mode)
@@ -66,6 +76,59 @@ const memory = {
 };
 
 const generateId = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// Function to format phone number to E.164 format
+function formatPhoneToE164(phoneNumber, defaultCountryCode = '92') {
+  if (!phoneNumber) return null;
+  
+  let cleanNumber = phoneNumber.replace(/[^\d+]/g, '');
+  
+  if (cleanNumber.startsWith('+')) {
+    const digits = cleanNumber.slice(1);
+    if (digits.length >= 7 && digits.length <= 15 && /^\d+$/.test(digits)) {
+      return cleanNumber;
+    }
+    return null;
+  }
+  
+  const digitsOnly = cleanNumber.replace(/\+/g, '');
+  
+  if (digitsOnly.length === 0) return null;
+  
+  console.log(`Processing digits: "${digitsOnly}"`);
+  
+  if (digitsOnly.startsWith('92')) {
+    if (digitsOnly.length >= 12 && digitsOnly.length <= 13) {
+      return `+${digitsOnly}`;
+    }
+  }
+  
+  if (digitsOnly.startsWith('03')) {
+    if (digitsOnly.length === 11) {
+      return `+92${digitsOnly.substring(1)}`;
+    }
+  }
+  
+  if (digitsOnly.startsWith('3') && digitsOnly.length === 10) {
+    return `+92${digitsOnly}`;
+  }
+  
+  if (digitsOnly.startsWith('0') && digitsOnly.length >= 10) {
+    return `+92${digitsOnly.substring(1)}`;
+  }
+  
+  if (digitsOnly.length === 10 && !digitsOnly.startsWith('0') && !digitsOnly.startsWith('3')) {
+    return `+1${digitsOnly}`;
+  } else if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
+    return `+${digitsOnly}`;
+  }
+  
+  if (digitsOnly.length >= 7 && digitsOnly.length <= 12) {
+    return `+${defaultCountryCode}${digitsOnly}`;
+  }
+  
+  return null;
+}
 
 async function updateCallByVapiId(vapiCallId, update) {
   if (USE_MEMORY_STORE) {
@@ -109,7 +172,7 @@ app.get("/api/contacts", async (_req, res) => {
   }
 });
 
-// Create call
+// ENHANCED CALL CREATION WITH BETTER CONFIGURATION
 async function createCallRouteHandler(req, res) {
   try {
     const { contactId, phoneNumber, name } = req.body;
@@ -136,52 +199,99 @@ async function createCallRouteHandler(req, res) {
       return res.status(400).json({ error: "Provide contactId or both name and phoneNumber" });
     }
 
+    const formattedNumber = formatPhoneToE164(resolvedNumber);
+    if (!formattedNumber) {
+      return res.status(400).json({ 
+        error: `Invalid phone number format: "${resolvedNumber}". Please use E.164 format like +1234567890` 
+      });
+    }
+
+    console.log(`Formatting phone number: "${resolvedNumber}" -> "${formattedNumber}"`);
+
     let data;
     if (USE_VAPI) {
       try {
-        const response = await axios.post(
-          "https://api.vapi.ai/calls",
-          {
-            assistantId: ASSISTANT_ID,
-            customer: { number: resolvedNumber, name: resolvedName }
+        // ENHANCED PAYLOAD WITH ASSISTANT OVERRIDES
+        const payload = {
+          type: "outboundPhoneCall",
+          assistantId: ASSISTANT_ID,
+          phoneNumberId: PHONE_NUMBER_ID,
+          customer: { 
+            number: formattedNumber,
+            name: resolvedName 
           },
-          {
-            headers: {
-              Authorization: `Bearer ${VAPI_KEY}`,
-              "Content-Type": "application/json"
-            }
-          }
-        );
+          // ADD ASSISTANT OVERRIDES TO ENSURE PROPER BEHAVIOR
+          // assistantOverrides: {
+          //   firstMessage: "Hello! This is your AI assistant calling. How can I help you today?",
+          //   voice: {
+          //     provider: "11labs",
+          //     voiceId: "rachel",
+          //     stability: 0.5,
+          //     similarityBoost: 0.8,
+          //     style: 0.0,
+          //     useSpeakerBoost: true
+          //   },
+          //   recordingEnabled: true,
+          //   endCallFunctionEnabled: true,
+          //   silenceTimeoutSeconds: 30,
+          //   maxDurationSeconds: 300
+          // }
+        };
+        
+        console.log("=== ENHANCED VAPI CALL PAYLOAD ===");
+        console.log(JSON.stringify(payload, null, 2));
+        console.log("==================================");
+        
+        const response = await axios.post("https://api.vapi.ai/call", payload, {
+          headers: {
+            Authorization: `Bearer ${VAPI_KEY}`,
+            "Content-Type": "application/json"
+          },
+          timeout: 30000
+        });
+        
         data = response.data;
+        console.log("✅ Vapi call initiated successfully:", data);
+        
+        // IMMEDIATE STATUS CHECK AFTER 5 SECONDS
+        setTimeout(async () => {
+          try {
+            const statusResponse = await axios.get(`https://api.vapi.ai/call/${data.id}`, {
+              headers: { Authorization: `Bearer ${VAPI_KEY}` }
+            });
+            console.log(`📞 Call ${data.id} status after 5s:`, statusResponse.data.status);
+            console.log(`📞 Full call details:`, JSON.stringify(statusResponse.data, null, 2));
+          } catch (err) {
+            console.error("Failed to check call status:", err.message);
+          }
+        }, 5000);
+        
       } catch (err) {
-        console.error("Vapi call failed, falling back to mock:", err.response?.data || err.message);
-        data = { id: `mock_${generateId()}` };
-        setTimeout(() => {
-          updateCallByVapiId(data.id, { status: "ringing" });
-        }, 1000);
-        setTimeout(() => {
-          updateCallByVapiId(data.id, {
-            status: "completed",
-            transcript: "Hello! This is a mock transcript from the demo."
-          });
-        }, 3000);
+        console.error("❌ Vapi call failed:");
+        console.error("Status:", err.response?.status);
+        console.error("Status Text:", err.response?.statusText);
+        console.error("Response Data:", JSON.stringify(err.response?.data, null, 2));
+        console.error("Message:", err.message);
+        
+        return res.status(500).json({
+          error: "Vapi call failed",
+          details: {
+            status: err.response?.status,
+            statusText: err.response?.statusText,
+            data: err.response?.data,
+            message: err.message
+          }
+        });
       }
     } else {
-      // Mock Vapi call in dev w/o credentials
+      console.log("Using mock call - Missing Vapi credentials");
       data = { id: `mock_${generateId()}` };
-      setTimeout(() => {
-        updateCallByVapiId(data.id, { status: "ringing" });
-      }, 1000);
-      setTimeout(() => {
-        updateCallByVapiId(data.id, {
-          status: "completed",
-          transcript: "Hello! This is a mock transcript from the demo."
-        });
-      }, 3000);
     }
 
+    // Store call in database
+    let created;
     if (USE_MEMORY_STORE) {
-      const created = {
+      created = {
         _id: generateId(),
         vapiCallId: data.id,
         contact: resolvedContactId || null,
@@ -192,61 +302,99 @@ async function createCallRouteHandler(req, res) {
         createdAt: new Date().toISOString()
       };
       memory.calls.unshift(created);
-      return res.json({ ...data, local: created });
+    } else {
+      created = await Call.create({
+        vapiCallId: data.id,
+        contact: resolvedContactId || undefined,
+        phoneNumber: resolvedNumber,
+        name: resolvedName,
+        status: "initiated",
+        transcript: null
+      });
     }
-
-    const created = await Call.create({
-      vapiCallId: data.id,
-      contact: resolvedContactId || undefined,
-      phoneNumber: resolvedNumber,
-      name: resolvedName,
-      status: "initiated",
-      transcript: null
-    });
 
     res.json({ ...data, local: created });
   } catch (error) {
-    console.error(error.response?.data || error.message);
+    console.error("Create call error:", error.response?.data || error.message);
     res.status(500).json({ error: "Failed to create call" });
   }
 }
 
 app.post("/api/calls", createCallRouteHandler);
-app.post("/calls", createCallRouteHandler);
 
-// Webhook for Vapi to send updates
+// ENHANCED WEBHOOK HANDLER WITH DETAILED LOGGING
 app.post("/api/vapi/webhook", async (req, res) => {
   try {
     const event = req.body || {};
-    const vapiId = event.id;
-    if (!vapiId) return res.sendStatus(200);
-
-    if (USE_MEMORY_STORE) {
-      const idx = memory.calls.findIndex((c) => c.vapiCallId === vapiId);
-      if (idx > -1) {
-        if (event.status) memory.calls[idx].status = event.status;
-        if (event.transcript !== undefined) memory.calls[idx].transcript = event.transcript;
-      }
-      console.log("Vapi Event:", event);
+    
+    console.log("🔔 === VAPI WEBHOOK RECEIVED ===");
+    console.log("Timestamp:", new Date().toISOString());
+    console.log("Event Type:", event.type);
+    console.log("Call ID:", event.call?.id || event.id);
+    console.log("Full Event:", JSON.stringify(event, null, 2));
+    console.log("===============================");
+    
+    const vapiId = event.call?.id || event.id;
+    if (!vapiId) {
+      console.log("⚠️ No call ID found in webhook event");
       return res.sendStatus(200);
     }
 
+    // DETAILED STATUS TRACKING
+    let statusUpdate = null;
+    let transcriptUpdate = null;
+
+    switch (event.type) {
+      case "call-started":
+        statusUpdate = "in-progress";
+        console.log("📞 Call started - Assistant should begin talking now");
+        break;
+      case "call-ended":
+        statusUpdate = "completed";
+        console.log("📞 Call ended");
+        if (event.endedReason) {
+          console.log("📞 End reason:", event.endedReason);
+        }
+        break;
+      case "transcript":
+        if (event.transcript) {
+          transcriptUpdate = event.transcript;
+          console.log("📝 Transcript update:", event.transcript);
+        }
+        break;
+      case "function-call":
+        console.log("⚡ Function call:", event.functionCall);
+        break;
+      case "hang":
+        console.log("📞 Call hang detected");
+        break;
+      case "speech-update":
+        console.log("🗣️ Speech update - Role:", event.role, "Status:", event.status);
+        break;
+      default:
+        console.log("📋 Unknown event type:", event.type);
+    }
+
+    // Update database
     const update = {};
+    if (statusUpdate) update.status = statusUpdate;
+    if (transcriptUpdate) update.transcript = transcriptUpdate;
     if (event.status) update.status = event.status;
-    if (event.transcript !== undefined) update.transcript = event.transcript;
 
-    await Call.findOneAndUpdate({ vapiCallId: vapiId }, update, { new: true });
+    if (Object.keys(update).length > 0) {
+      await updateCallByVapiId(vapiId, update);
+      console.log("💾 Updated call in database:", update);
+    }
 
-    console.log("Vapi Event:", event);
     res.sendStatus(200);
   } catch (err) {
-    console.error(err);
+    console.error("❌ Webhook error:", err);
     res.sendStatus(200);
   }
 });
 
 // View call history
-async function getCallsRouteHandler(_req, res) {
+app.get("/api/calls", async (_req, res) => {
   try {
     if (USE_MEMORY_STORE) {
       return res.json(memory.calls);
@@ -257,9 +405,199 @@ async function getCallsRouteHandler(_req, res) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch calls" });
   }
-}
+});
 
-app.get("/api/calls", getCallsRouteHandler);
-app.get("/calls", getCallsRouteHandler);
+// DIAGNOSTIC ENDPOINTS
 
-app.listen(5000, () => console.log("Server running on http://localhost:5000"));
+// 1. Test assistant configuration
+app.get("/api/test/assistant", async (req, res) => {
+  try {
+    if (!VAPI_KEY || !ASSISTANT_ID) {
+      return res.status(400).json({ error: "Vapi credentials not configured" });
+    }
+
+    const assistantResponse = await axios.get(`https://api.vapi.ai/assistant/${ASSISTANT_ID}`, {
+      headers: { Authorization: `Bearer ${VAPI_KEY}` }
+    });
+
+    const assistant = assistantResponse.data;
+    
+    const diagnostics = {
+      assistantId: ASSISTANT_ID,
+      hasModel: !!assistant.model,
+      hasVoice: !!assistant.voice,
+      hasFirstMessage: !!assistant.firstMessage,
+      model: assistant.model,
+      voice: assistant.voice,
+      firstMessage: assistant.firstMessage,
+      systemMessage: assistant.systemMessage,
+      status: "Assistant configuration looks good"
+    };
+
+    const issues = [];
+    if (!assistant.model) issues.push("❌ No model configured");
+    if (!assistant.voice) issues.push("❌ No voice configured");
+    if (!assistant.firstMessage) issues.push("❌ No first message - assistant might not start talking");
+    if (!assistant.systemMessage) issues.push("⚠️ No system message - might cause unexpected behavior");
+
+    if (issues.length > 0) {
+      diagnostics.status = "Issues found";
+      diagnostics.issues = issues;
+    }
+
+    console.log("🔧 Assistant diagnostics:", diagnostics);
+    res.json(diagnostics);
+  } catch (error) {
+    console.error("Assistant test failed:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "Assistant test failed",
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+// 2. Get full assistant configuration (default to current assistant)
+app.get("/api/vapi/assistant", async (req, res) => {
+  try {
+    if (!VAPI_KEY) {
+      return res.status(400).json({ error: "Vapi API key not configured" });
+    }
+
+    const response = await axios.get(`https://api.vapi.ai/assistant/${ASSISTANT_ID}`, {
+      headers: { Authorization: `Bearer ${VAPI_KEY}` }
+    });
+
+    console.log("Assistant configuration:", JSON.stringify(response.data, null, 2));
+    res.json(response.data);
+  } catch (error) {
+    console.error("Failed to fetch assistant:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "Failed to fetch assistant",
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+// 2b. Get specific assistant configuration by ID
+app.get("/api/vapi/assistant/:id", async (req, res) => {
+  try {
+    if (!VAPI_KEY) {
+      return res.status(400).json({ error: "Vapi API key not configured" });
+    }
+
+    const assistantId = req.params.id;
+    const response = await axios.get(`https://api.vapi.ai/assistant/${assistantId}`, {
+      headers: { Authorization: `Bearer ${VAPI_KEY}` }
+    });
+
+    console.log("Assistant configuration:", JSON.stringify(response.data, null, 2));
+    res.json(response.data);
+  } catch (error) {
+    console.error("Failed to fetch assistant:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "Failed to fetch assistant",
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+// 3. Get detailed call information
+app.get("/api/debug/call/:callId", async (req, res) => {
+  try {
+    if (!VAPI_KEY) {
+      return res.status(400).json({ error: "Vapi API key not configured" });
+    }
+
+    const callId = req.params.callId;
+    const response = await axios.get(`https://api.vapi.ai/call/${callId}`, {
+      headers: { Authorization: `Bearer ${VAPI_KEY}` }
+    });
+
+    console.log("🔍 Call debug info:", JSON.stringify(response.data, null, 2));
+    res.json(response.data);
+  } catch (error) {
+    console.error("Failed to fetch call details:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "Failed to fetch call details",
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+// 4. Get phone numbers from Vapi
+app.get("/api/vapi/phone-numbers", async (req, res) => {
+  try {
+    if (!VAPI_KEY) {
+      return res.status(400).json({ error: "Vapi API key not configured" });
+    }
+
+    const response = await axios.get("https://api.vapi.ai/phone-number", {
+      headers: { Authorization: `Bearer ${VAPI_KEY}` }
+    });
+
+    console.log("Available Vapi phone numbers:", response.data);
+    res.json(response.data);
+  } catch (error) {
+    console.error("Failed to fetch Vapi phone numbers:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "Failed to fetch Vapi phone numbers",
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+// 5. Get calls from Vapi API directly
+app.get("/api/vapi/calls", async (req, res) => {
+  try {
+    if (!USE_VAPI) {
+      return res.status(400).json({ error: "Vapi not configured" });
+    }
+
+    const response = await axios.get("https://api.vapi.ai/call", {
+      headers: { Authorization: `Bearer ${VAPI_KEY}` }
+    });
+
+    res.json(response.data);
+  } catch (error) {
+    console.error("Failed to fetch Vapi calls:", error.response?.data || error.message);
+    res.status(500).json({ error: "Failed to fetch Vapi calls" });
+  }
+});
+
+// 6. Test phone number formatting
+app.post("/api/test-phone", (req, res) => {
+  const { phoneNumber } = req.body;
+  const formatted = formatPhoneToE164(phoneNumber);
+  
+  res.json({
+    original: phoneNumber,
+    formatted: formatted,
+    isValid: formatted !== null,
+    examples: {
+      pakistani: "03001234567 -> +923001234567",
+      us: "1234567890 -> +11234567890"
+    }
+  });
+});
+
+// Enhanced logging for debugging
+console.log("=== Vapi Configuration Check ===");
+console.log("VAPI_API_KEY:", VAPI_KEY ? `Set (${VAPI_KEY.substring(0, 10)}...)` : "Missing");
+console.log("VAPI_ASSISTANT_ID:", ASSISTANT_ID ? `Set (${ASSISTANT_ID})` : "Missing");
+console.log("VAPI_PHONE_NUMBER_ID:", PHONE_NUMBER_ID ? `Set (${PHONE_NUMBER_ID})` : "Missing");
+console.log("USE_VAPI:", USE_VAPI);
+console.log("================================");
+
+app.listen(5000, () => {
+  console.log("🚀 Server running on http://localhost:5000");
+  console.log("\n🔧 DEBUGGING ENDPOINTS:");
+  console.log("- GET /api/test/assistant - Test your assistant configuration");
+  console.log("- GET /api/vapi/assistant - Get full assistant config");
+  console.log("- GET /api/debug/call/:callId - Get detailed call information");
+  console.log("- GET /api/vapi/phone-numbers - List your phone numbers");
+  console.log("- POST /api/test-phone - Test phone number formatting");
+  console.log("\n📞 TO TROUBLESHOOT YOUR ISSUE:");
+  console.log("1. First run: GET /api/test/assistant");
+  console.log("2. After making a call, run: GET /api/debug/call/YOUR_CALL_ID");
+  console.log("3. Check your Vapi dashboard for assistant configuration");
+});
