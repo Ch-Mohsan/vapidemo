@@ -209,6 +209,22 @@ function parseTranscriptFromVapiCall(callData) {
     if (e.trim()) return e.trim();
   }
 
+  // Additional common shapes observed across providers / API versions
+  const moreCandidates = [
+    callData.finalTranscript,
+    callData.fullTranscript,
+    Array.isArray(callData.transcripts) ? callData.transcripts.join("\n") : null,
+    callData.summary?.transcript,
+    callData.summary?.text,
+    callData.analysis?.transcript,
+    callData.analysis?.text,
+    Array.isArray(callData.dialog) ? callData.dialog.join("\n") : null,
+    Array.isArray(callData.conversation) ? callData.conversation.join("\n") : null,
+    typeof callData.log === "string" ? callData.log : null,
+  ];
+  const found = moreCandidates.find((s) => typeof s === "string" && s.trim().length > 0);
+  if (found) return found.trim();
+
   return null;
 }
 
@@ -229,7 +245,9 @@ function isTerminalCallStatus(status) {
 function startPollingVapiCall(callId) {
   const MAX_MS = Number(process.env.VAPI_POLL_MAX_MS || 180000); // 3 minutes
   const INTERVAL_MS = Number(process.env.VAPI_POLL_INTERVAL_MS || 3000);
+  const GRACE_MS = Number(process.env.VAPI_POLL_GRACE_MS || 15000); // keep polling a bit after end
   const startedAt = Date.now();
+  let terminalSeenAt = null;
 
   async function tick() {
     try {
@@ -263,7 +281,13 @@ function startPollingVapiCall(callId) {
         }
       }
 
-      if (isTerminalCallStatus(status) || Date.now() - startedAt > MAX_MS) {
+      if (isTerminalCallStatus(status) && terminalSeenAt === null) {
+        terminalSeenAt = Date.now();
+      }
+
+      const exceeded = Date.now() - startedAt > MAX_MS;
+      const graceExceeded = terminalSeenAt !== null && Date.now() - terminalSeenAt > GRACE_MS;
+      if ((isTerminalCallStatus(status) && graceExceeded) || exceeded) {
         return; // stop polling
       }
     } catch (err) {
