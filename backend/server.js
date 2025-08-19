@@ -313,6 +313,10 @@ if (Object.keys(mergedOverrides).length > 0) {
             const statusData = await vapiGetCall(data.id);
             console.log(`📞 Call ${data.id} status after 5s:`, statusData.status);
             console.log(`📞 Full call details:`, JSON.stringify(statusData, null, 2));
+            // Persist status immediately so UI reflects progress even if webhook lags
+            if (statusData?.status) {
+              await updateCallByVapiId(data.id, { status: statusData.status });
+            }
           } catch (err) {
             console.error("Failed to check call status:", err.message);
           }
