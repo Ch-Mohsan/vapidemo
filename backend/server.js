@@ -459,6 +459,21 @@ if (Object.keys(mergedOverrides).length > 0) {
             if (statusData?.status) {
               await updateCallByVapiId(data.id, { status: statusData.status });
             }
+            // Also persist any available transcript early
+            const earlyTranscript = parseTranscriptFromVapiCall(statusData);
+            if (earlyTranscript && earlyTranscript.trim()) {
+              const existing = await getCallByVapiId(data.id);
+              const previousText = typeof existing?.transcript === "string" ? existing.transcript : "";
+              const nextText = previousText
+                ? (earlyTranscript.length > previousText.length && earlyTranscript.includes(previousText)
+                    ? earlyTranscript
+                    : `${previousText}\n${earlyTranscript}`)
+                : earlyTranscript;
+              if (nextText !== previousText) {
+                await updateCallByVapiId(data.id, { transcript: nextText });
+                console.log(`📝 Early transcript saved (len=${nextText.length})`);
+              }
+            }
           } catch (err) {
             console.error("Failed to check call status:", err.message);
           }
