@@ -151,6 +151,13 @@ async function updateCallByVapiId(vapiCallId, update) {
   return Call.findOneAndUpdate({ vapiCallId }, update, { new: true });
 }
 
+async function getCallByVapiId(vapiCallId) {
+  if (USE_MEMORY_STORE) {
+    return memory.calls.find((c) => c.vapiCallId === vapiCallId) || null;
+  }
+  return Call.findOne({ vapiCallId });
+}
+
 // Contacts
 app.post("/api/contacts", async (req, res) => {
   try {
@@ -405,8 +412,16 @@ app.post("/api/vapi/webhook", async (req, res) => {
     // Update database
     const update = {};
     if (statusUpdate) update.status = statusUpdate;
-    if (transcriptUpdate) update.transcript = transcriptUpdate;
     if (event.status && !update.status) update.status = event.status;
+
+    // Append transcript updates instead of overwriting to ensure UI shows full conversation
+    if (transcriptUpdate) {
+      const existing = await getCallByVapiId(vapiId);
+      const previousText = typeof existing?.transcript === "string" ? existing.transcript : "";
+      update.transcript = previousText
+        ? `${previousText}\n${transcriptUpdate}`
+        : transcriptUpdate;
+    }
 
     if (Object.keys(update).length > 0) {
       await updateCallByVapiId(vapiId, update);
