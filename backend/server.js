@@ -158,6 +158,124 @@ async function getCallByVapiId(vapiCallId) {
   return Call.findOne({ vapiCallId });
 }
 
+// Extract best-effort transcript text from Vapi getCall response
+function parseTranscriptFromVapiCall(callData) {
+  if (!callData || typeof callData !== "object") return null;
+
+  if (typeof callData.transcript === "string" && callData.transcript.trim()) {
+    return callData.transcript.trim();
+  }
+
+  // Aggregate messages text if present
+  if (Array.isArray(callData.messages)) {
+    const parts = [];
+    for (const msg of callData.messages) {
+      if (!msg) continue;
+      if (typeof msg.text === "string" && msg.text.trim()) {
+        parts.push(msg.text.trim());
+        continue;
+      }
+      if (Array.isArray(msg.content)) {
+        const c = msg.content
+          .map((p) => {
+            if (typeof p === "string") return p;
+            if (p && typeof p === "object") return p.text || p.value || "";
+            return "";
+          })
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        if (c) parts.push(c);
+      }
+    }
+    if (parts.length > 0) return parts.join("\n");
+  }
+
+  // Fallbacks commonly seen
+  if (Array.isArray(callData.turns)) {
+    const t = callData.turns
+      .map((t) => (typeof t?.text === "string" ? t.text : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (t) return t;
+  }
+
+  if (Array.isArray(callData.events)) {
+    const e = callData.events
+      .map((e) => e?.transcript || e?.text || "")
+      .filter((s) => typeof s === "string" && s.trim())
+      .join("\n");
+    if (e.trim()) return e.trim();
+  }
+
+  return null;
+}
+
+function isTerminalCallStatus(status) {
+  if (!status || typeof status !== "string") return false;
+  const s = status.toLowerCase();
+  return [
+    "completed",
+    "ended",
+    "failed",
+    "no-answer",
+    "busy",
+    "canceled",
+    "cancelled"
+  ].includes(s);
+}
+
+function startPollingVapiCall(callId) {
+  const MAX_MS = Number(process.env.VAPI_POLL_MAX_MS || 180000); // 3 minutes
+  const INTERVAL_MS = Number(process.env.VAPI_POLL_INTERVAL_MS || 3000);
+  const startedAt = Date.now();
+
+  async function tick() {
+    try {
+      const data = await vapiGetCall(callId);
+      const status = data?.status;
+
+      // Update status if present
+      if (status) {
+        await updateCallByVapiId(callId, { status });
+      }
+
+      // Append transcript if we can extract anything new
+      const incomingText = parseTranscriptFromVapiCall(data);
+      if (incomingText && incomingText.trim()) {
+        const existing = await getCallByVapiId(callId);
+        const previous = typeof existing?.transcript === "string" ? existing.transcript : "";
+
+        let nextTranscript;
+        if (!previous) {
+          nextTranscript = incomingText;
+        } else if (incomingText.length > previous.length && incomingText.includes(previous)) {
+          // Monotonic growth from API, prefer the longer aggregate
+          nextTranscript = incomingText;
+        } else if (!previous.includes(incomingText)) {
+          // New chunk, append
+          nextTranscript = `${previous}\n${incomingText}`;
+        }
+
+        if (nextTranscript && nextTranscript !== previous) {
+          await updateCallByVapiId(callId, { transcript: nextTranscript });
+        }
+      }
+
+      if (isTerminalCallStatus(status) || Date.now() - startedAt > MAX_MS) {
+        return; // stop polling
+      }
+    } catch (err) {
+      // Keep polling despite transient errors
+    }
+    setTimeout(tick, INTERVAL_MS);
+  }
+
+  // Start without awaiting
+  setTimeout(tick, INTERVAL_MS);
+}
+
 // Contacts
 app.post("/api/contacts", async (req, res) => {
   try {
@@ -321,6 +439,11 @@ if (Object.keys(mergedOverrides).length > 0) {
             console.error("Failed to check call status:", err.message);
           }
         }, 5000);
+
+        // Start polling as a fallback in case webhooks are delayed or unreachable
+        try {
+          startPollingVapiCall(data.id);
+        } catch {}
         
       } catch (err) {
         console.error("❌ Vapi call failed:");
